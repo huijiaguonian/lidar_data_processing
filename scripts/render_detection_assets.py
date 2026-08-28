@@ -177,6 +177,10 @@ def parse_args():
     )
     parser.add_argument("--x-limits", nargs=2, type=float, default=(-25.0, 50.0))
     parser.add_argument("--y-limits", nargs=2, type=float, default=(-15.0, 40.0))
+    parser.add_argument(
+        "--source-series",
+        help="optional source directory label recorded in summary.json",
+    )
     return parser.parse_args()
 
 
@@ -189,15 +193,16 @@ def main():
     for result in results:
         output = args.output_dir / f'{result["name"]}.png'
         render_individual(result, output, args.x_limits, args.y_limits)
-        summary.append(
-            {
-                "frame": result["name"],
-                "environment_points": len(result["environment"]),
-                "non_ground_roi_points": len(result["roi"]),
-                "proposal_count": len(result["detections"]),
-                "asset": output.name,
-            }
-        )
+        record = {
+            "frame": result["name"],
+            "environment_points": len(result["environment"]),
+            "non_ground_roi_points": len(result["roi"]),
+            "proposal_count": len(result["detections"]),
+            "asset": output.name,
+        }
+        if args.source_series:
+            record["input"] = f"{args.source_series}/{result['name']}.bin"
+        summary.append(record)
         print(f"Saved {output}")
 
     if len(results) == 4:
@@ -206,7 +211,7 @@ def main():
         print(f"Saved {grid_output}")
 
     summary_path = args.output_dir / "summary.json"
-    with summary_path.open("w", encoding="utf-8") as handle:
+    with summary_path.open("w", encoding="utf-8", newline="\n") as handle:
         json.dump(summary, handle, indent=2)
         handle.write("\n")
     print(f"Saved {summary_path}")

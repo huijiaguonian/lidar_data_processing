@@ -2,16 +2,16 @@
 
 ## Scope
 
-These assets were produced from four real PandarXT32 frames with the same maintained detector and the same parameter set. They demonstrate repeatability of the processing path; they are not an accuracy benchmark because the capture has no ground-truth 3D boxes.
+These assets were produced from four real PandarXT32 frames in the corrected `frames_bin_xt32` series, using the same maintained detector and the same parameter set. They demonstrate repeatability of the processing path; they are not an accuracy benchmark because the capture has no ground-truth 3D boxes.
 
 ![Four-frame detection overview](assets/demo/detection-demo-grid.png)
 
 | Frame | Aligned environment points | Non-ground ROI points | Geometric proposals |
 |---|---:|---:|---:|
-| `frame_0000` | 30,964 | 8,732 | 30 |
-| `frame_0001` | 32,654 | 10,546 | 33 |
-| `frame_0020` | 33,062 | 9,786 | 36 |
-| `frame_0100` | 40,997 | 10,332 | 25 |
+| `frame_0000` | 45,849 | 28,047 | 49 |
+| `frame_0001` | 48,125 | 16,791 | 18 |
+| `frame_0020` | 51,368 | 16,854 | 11 |
+| `frame_0100` | 49,971 | 30,497 | 62 |
 
 Individual bird's-eye-view frames:
 
@@ -33,7 +33,8 @@ python scripts\render_detection_assets.py `
   path\to\frame_0000 `
   path\to\frame_0001 `
   path\to\frame_0020 `
-  path\to\frame_0100
+  path\to\frame_0100 `
+  --source-series frames_bin_xt32
 ```
 
 The underlying PCAP and BIN data are intentionally excluded because of size. The PNG files and [summary.json](assets/demo/summary.json) provide a compact, traceable record of these runs.
