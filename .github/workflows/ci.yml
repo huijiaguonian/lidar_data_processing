@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  parser-tests:
+  regression-tests:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -21,9 +21,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - name: Install core package and tests
-        run: python -m pip install -e ".[dev]"
-      - name: Run parser regression tests
+      - name: Install detector and test dependencies
+        run: python -m pip install -e ".[detection,dev]"
+      - name: Run regression tests
         run: python -m pytest
       - name: Compile maintained Python sources
         run: python -m compileall -q src examples scripts

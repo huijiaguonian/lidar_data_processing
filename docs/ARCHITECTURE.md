@@ -53,15 +53,16 @@ An XT32 packet contains eight azimuth blocks. A revolution can wrap inside a pac
 The detector is geometry-only:
 
 1. Reject invalid values and points outside the radial range.
-2. Fit the dominant ground plane with seeded RANSAC.
-3. Reject a dominant plane whose tilt suggests a wall.
-4. Rotate the cloud so the ground normal becomes `+Z`.
-5. Remove ground inliers and apply a 3D region of interest.
-6. Voxel-downsample the remaining points.
-7. Run DBSCAN in overlapping radial bands with looser settings at distance.
-8. Merge clusters that share points in overlapping bands.
-9. Split oversized clusters only across a clear physical gap.
-10. Fit and validate a minimum-area rectangle plus vertical extent.
+2. Extract up to five dominant planes with seeded RANSAC.
+3. Select a plane whose tilt and distance match the 1.20 m sensor-height prior.
+4. Fail explicitly if no physically plausible ground candidate exists.
+5. Rotate the cloud so the selected ground normal becomes `+Z`.
+6. Remove ground inliers and apply a 3D region of interest.
+7. Voxel-downsample the remaining points.
+8. Run DBSCAN in overlapping radial bands with looser settings at distance.
+9. Merge clusters that share points in overlapping bands.
+10. Split oversized clusters only across a clear physical gap.
+11. Fit and validate a minimum-area rectangle plus vertical extent, using stricter minimum point, width, and aspect-ratio limits beyond 10 m.
 
 The thresholds currently live near the top of `detect_unsupervised.py`. They are intentionally visible because this is a research prototype, not a trained universal detector.
 
@@ -75,4 +76,4 @@ The maintained commands fail early for:
 - an angle CSV that is not exactly 32 ordered channels;
 - malformed `N x 4` BIN files;
 - too few points for a credible ground estimate;
-- a dominant plane that is probably a wall.
+- no plane matching the configured sensor-height and tilt constraints.

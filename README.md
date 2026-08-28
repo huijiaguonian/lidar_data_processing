@@ -23,12 +23,13 @@ The portfolio version focuses on the parts that are technically defensible and r
 - block-level azimuth handling and frame splitting at a real revolution boundary;
 - distance scaling read from each packet header instead of hard-coded;
 - a documented `N x 4` point-cloud interchange format;
+- height-constrained multi-plane ground selection;
 - range-adaptive density clustering and conservative OBB fitting;
 - Open3D preview, CloudCompare-compatible PLY, and JSON export;
 - reproducible rendering of real detection outputs for portfolio documentation;
-- tests for the packet layout and the critical distance-unit conversion.
+- parser and detector regression tests plus a reproducible 20-frame stability audit.
 
-The result is a complete unsupervised main project rather than an unfinished end-to-end claim. Real-frame artifacts and their proposal counts are documented in [docs/RESULTS.md](docs/RESULTS.md).
+The result is a complete unsupervised main project rather than an unfinished end-to-end claim. Real-frame artifacts and an evenly sampled 20-frame stability audit are documented in [docs/RESULTS.md](docs/RESULTS.md).
 
 ## Pipeline
 
@@ -38,7 +39,7 @@ flowchart LR
     B --> C[Angle correction]
     C --> D[Azimuth-wrap frame split]
     D --> E[N x 4 float32 BIN]
-    E --> F[Ground alignment]
+    E --> F[Height-constrained ground alignment]
     F --> G[Range-adaptive DBSCAN]
     G --> H[Conservative cluster split]
     H --> I[OBB proposals]
@@ -149,9 +150,9 @@ The recorded data used during this project was visually verified with a `0.001 m
 
 ```text
 src/hesai_xt32/     maintained Python package and CLI entry points
-tests/              packet-layout and scale regression tests
+tests/              parser and detector regression tests
 examples/           synthetic data generator and usage notes
-scripts/            reproducible portfolio-asset renderer
+scripts/            asset renderer and sequence-stability audit
 docs/               architecture, formats, results, and retrospective
 legacy/             archived experiments; not part of the supported API
 ```
@@ -160,7 +161,7 @@ The full OpenPCDet source tree is intentionally not vendored. The archived super
 
 ## Method and limitations
 
-The detector estimates a dominant ground plane, rotates it to `+Z`, removes ground inliers, applies a 3D ROI, downsamples the remaining points, and runs DBSCAN in overlapping radial bands. Candidate clusters are conservatively split only when a clear physical gap is present, then fitted with a minimum-area 2D rectangle and a 3D height range.
+The detector extracts several seeded RANSAC planes and selects a ground candidate whose tilt and distance agree with the 1.20 m sensor-height prior. It then rotates the selected plane to `+Z`, removes ground inliers, applies a 3D ROI, downsamples the remaining points, and runs DBSCAN in overlapping radial bands. Candidate clusters are conservatively split only when a clear physical gap is present, then fitted with a minimum-area 2D rectangle and a 3D height range.
 
 This design favors fewer false positives over maximum recall. It still has important limitations:
 

@@ -23,7 +23,10 @@ MIN_INTENSITY = 0.0
 
 RANSAC_DIST_THRESH = 0.10
 RANSAC_MAX_ITER = 500
-MAX_GROUND_TILT_DEG = 30.0
+GROUND_PLANE_ATTEMPTS = 5
+EXPECTED_SENSOR_HEIGHT_M = 1.20
+SENSOR_HEIGHT_TOLERANCE_M = 0.45
+MAX_GROUND_TILT_DEG = 20.0
 GROUND_CLEARANCE = ROI_Z[0]
 
 VOXEL_SIZE = 0.03
@@ -62,43 +65,103 @@ def load_and_prefilter(bin_path):
     return filtered[:, :3].astype(np.float64, copy=False)
 
 
+def normalize_plane_model(plane_model):
+    plane_model = np.asarray(plane_model, dtype=np.float64)
+    norm = np.linalg.norm(plane_model[:3])
+    if norm == 0:
+        raise ValueError("RANSAC returned a zero ground-plane normal.")
+    plane_model /= norm
+    if plane_model[2] < 0:
+        plane_model *= -1.0
+    return plane_model
+
+
+def ground_plane_metrics(plane_model):
+    normal = plane_model[:3]
+    tilt = math.degrees(math.acos(np.clip(normal[2], -1.0, 1.0)))
+    sensor_height = float(plane_model[3])
+    return {
+        "normal": normal,
+        "tilt_degrees": tilt,
+        "sensor_height_m": sensor_height,
+    }
+
+
 def estimate_ground_plane(points):
-    o3d.utility.random.seed(7)
     candidates = points[np.linalg.norm(points[:, :2], axis=1) <= 30.0]
     if len(candidates) < 100:
         raise ValueError("Too few points for ground-plane estimation.")
 
-    pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(candidates))
-    plane_model, inliers = pcd.segment_plane(
-        distance_threshold=RANSAC_DIST_THRESH,
-        ransac_n=3,
-        num_iterations=RANSAC_MAX_ITER,
-    )
-    plane_model = np.asarray(plane_model, dtype=np.float64)
-    normal = plane_model[:3]
-    norm = np.linalg.norm(normal)
-    if norm == 0:
-        raise ValueError("RANSAC returned a zero ground-plane normal.")
-    plane_model /= norm
-    normal = plane_model[:3]
+    remaining = candidates.copy()
+    plausible_planes = []
+    attempted = []
+    minimum_height = EXPECTED_SENSOR_HEIGHT_M - SENSOR_HEIGHT_TOLERANCE_M
+    maximum_height = EXPECTED_SENSOR_HEIGHT_M + SENSOR_HEIGHT_TOLERANCE_M
 
-    if normal[2] < 0:
-        plane_model *= -1.0
-        normal = plane_model[:3]
+    for attempt in range(GROUND_PLANE_ATTEMPTS):
+        if len(remaining) < 100:
+            break
 
-    tilt = math.degrees(math.acos(np.clip(normal[2], -1.0, 1.0)))
-    inlier_ratio = len(inliers) / len(candidates)
-    print(
-        f"[GROUND] normal={normal}, tilt={tilt:.2f} deg, "
-        f"inliers={len(inliers):,} ({inlier_ratio:.1%})"
-    )
-    if tilt > MAX_GROUND_TILT_DEG:
+        o3d.utility.random.seed(7 + attempt)
+        pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(remaining))
+        plane_model, inliers = pcd.segment_plane(
+            distance_threshold=RANSAC_DIST_THRESH,
+            ransac_n=3,
+            num_iterations=RANSAC_MAX_ITER,
+        )
+        plane_model = normalize_plane_model(plane_model)
+        inlier_indices = np.asarray(inliers, dtype=np.int64)
+        ground_points = remaining[inlier_indices]
+        metrics = ground_plane_metrics(plane_model)
+        tilt = metrics["tilt_degrees"]
+        sensor_height = metrics["sensor_height_m"]
+        inlier_ratio = len(ground_points) / len(candidates)
+        plausible = (
+            tilt <= MAX_GROUND_TILT_DEG
+            and minimum_height <= sensor_height <= maximum_height
+        )
+        status = "plausible" if plausible else "rejected"
+        print(
+            f"[GROUND candidate {attempt + 1}] normal={metrics['normal']}, "
+            f"tilt={tilt:.2f} deg, height={sensor_height:.3f} m, "
+            f"inliers={len(ground_points):,} ({inlier_ratio:.1%}), {status}"
+        )
+        attempted.append((tilt, sensor_height, len(ground_points)))
+
+        if plausible:
+            height_quality = 1.0 - (
+                abs(sensor_height - EXPECTED_SENSOR_HEIGHT_M)
+                / SENSOR_HEIGHT_TOLERANCE_M
+            )
+            tilt_quality = max(math.cos(math.radians(tilt)), 0.1)
+            score = len(ground_points) * max(height_quality, 0.1) * tilt_quality
+            plausible_planes.append(
+                (score, plane_model.copy(), ground_points.copy(), metrics)
+            )
+
+        keep = np.ones(len(remaining), dtype=bool)
+        keep[inlier_indices] = False
+        remaining = remaining[keep]
+
+    if not plausible_planes:
+        details = ", ".join(
+            f"tilt={tilt:.1f}deg/height={height:.2f}m/inliers={count}"
+            for tilt, height, count in attempted
+        )
         raise ValueError(
-            f"Dominant plane tilt {tilt:.1f} deg exceeds "
-            f"{MAX_GROUND_TILT_DEG:.1f} deg; it is probably a wall."
+            "No plausible ground plane found near the configured sensor height "
+            f"({EXPECTED_SENSOR_HEIGHT_M:.2f} +/- "
+            f"{SENSOR_HEIGHT_TOLERANCE_M:.2f} m). Candidates: {details}"
         )
 
-    ground_points = candidates[np.asarray(inliers, dtype=np.int64)]
+    _, plane_model, ground_points, metrics = max(
+        plausible_planes, key=lambda candidate: candidate[0]
+    )
+    print(
+        f"[GROUND selected] tilt={metrics['tilt_degrees']:.2f} deg, "
+        f"height={metrics['sensor_height_m']:.3f} m, "
+        f"inliers={len(ground_points):,}"
+    )
     return plane_model, ground_points
 
 
@@ -250,9 +313,9 @@ def split_oversized_cluster(cluster_points, depth=0):
     if range_m < 10.0:
         minimum_points, max_length, max_width, split_gap = 20, 6.0, 3.0, 0.65
     elif range_m < 20.0:
-        minimum_points, max_length, max_width, split_gap = 8, 8.0, 4.0, 0.80
+        minimum_points, max_length, max_width, split_gap = 12, 8.0, 4.0, 0.80
     else:
-        minimum_points, max_length, max_width, split_gap = 5, 10.0, 5.0, 1.00
+        minimum_points, max_length, max_width, split_gap = 10, 10.0, 5.0, 1.00
 
     if len(cluster_points) < 2 * minimum_points:
         return [cluster_points]
@@ -307,19 +370,19 @@ def fit_filtered_obb(cluster_points, label, color):
         max_aspect_ratio = 6.0
         max_ground_gap = 0.70
     elif range_m < 20.0:
-        minimum_points = 8
+        minimum_points = 12
         min_length, max_length = 0.30, 8.0
-        min_width, max_width = 0.05, 4.0
-        min_height, max_height = 0.20, 4.0
-        max_aspect_ratio = 30.0
-        max_ground_gap = 1.0
+        min_width, max_width = 0.20, 4.0
+        min_height, max_height = 0.30, 4.0
+        max_aspect_ratio = 12.0
+        max_ground_gap = 0.85
     else:
-        minimum_points = 5
-        min_length, max_length = 0.20, 10.0
-        min_width, max_width = 0.02, 5.0
-        min_height, max_height = 0.15, 4.0
-        max_aspect_ratio = 50.0
-        max_ground_gap = 1.5
+        minimum_points = 10
+        min_length, max_length = 0.30, 10.0
+        min_width, max_width = 0.15, 5.0
+        min_height, max_height = 0.25, 4.0
+        max_aspect_ratio = 20.0
+        max_ground_gap = 1.0
 
     if len(cluster_points) < minimum_points:
         return None

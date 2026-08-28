@@ -3,23 +3,23 @@
     "frame": "frame_0000",
     "environment_points": 45849,
     "non_ground_roi_points": 28047,
-    "proposal_count": 49,
+    "proposal_count": 36,
     "asset": "frame_0000.png",
     "input": "frames_bin_xt32/frame_0000.bin"
   },
   {
     "frame": "frame_0001",
     "environment_points": 48125,
-    "non_ground_roi_points": 16791,
-    "proposal_count": 18,
+    "non_ground_roi_points": 29947,
+    "proposal_count": 35,
     "asset": "frame_0001.png",
     "input": "frames_bin_xt32/frame_0001.bin"
   },
   {
     "frame": "frame_0020",
     "environment_points": 51368,
-    "non_ground_roi_points": 16854,
-    "proposal_count": 11,
+    "non_ground_roi_points": 33297,
+    "proposal_count": 37,
     "asset": "frame_0020.png",
     "input": "frames_bin_xt32/frame_0020.bin"
   },
@@ -27,7 +27,7 @@
     "frame": "frame_0100",
     "environment_points": 49971,
     "non_ground_roi_points": 30497,
-    "proposal_count": 62,
+    "proposal_count": 43,
     "asset": "frame_0100.png",
     "input": "frames_bin_xt32/frame_0100.bin"
   }
