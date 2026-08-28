@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hesai-xt32-pipeline"
+version = "0.1.0"
+description = "PandarXT32 PCAP parsing, point-cloud visualization, and CPU-only geometric object proposals"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Xiong Zhu" }]
+dependencies = ["numpy>=1.23"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.optional-dependencies]
+pcap = ["scapy>=2.5"]
+visualization = ["matplotlib>=3.7", "open3d>=0.17"]
+detection = ["opencv-python>=4.7", "open3d>=0.17", "scikit-learn>=1.2"]
+all = [
+  "matplotlib>=3.7",
+  "open3d>=0.17",
+  "opencv-python>=4.7",
+  "scapy>=2.5",
+  "scikit-learn>=1.2",
+]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[project.scripts]
+hesai-xt32-parse = "hesai_xt32.parse_pcap:main"
+hesai-xt32-view = "hesai_xt32.visualize_bin:main"
+hesai-xt32-detect = "hesai_xt32.detect_unsupervised:main"
+
+[project.urls]
+Repository = "https://github.com/huijiaguonian/lidar_data_processing"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+exclude = ["legacy"]
+line-length = 88
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]

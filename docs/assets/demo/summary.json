@@ -1,0 +1,30 @@
+[
+  {
+    "frame": "frame_0000",
+    "environment_points": 30964,
+    "non_ground_roi_points": 8732,
+    "proposal_count": 30,
+    "asset": "frame_0000.png"
+  },
+  {
+    "frame": "frame_0001",
+    "environment_points": 32654,
+    "non_ground_roi_points": 10546,
+    "proposal_count": 33,
+    "asset": "frame_0001.png"
+  },
+  {
+    "frame": "frame_0020",
+    "environment_points": 33062,
+    "non_ground_roi_points": 9786,
+    "proposal_count": 36,
+    "asset": "frame_0020.png"
+  },
+  {
+    "frame": "frame_0100",
+    "environment_points": 40997,
+    "non_ground_roi_points": 10332,
+    "proposal_count": 25,
+    "asset": "frame_0100.png"
+  }
+]

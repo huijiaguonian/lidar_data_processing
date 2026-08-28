@@ -1,0 +1,767 @@
+diff --git a/pcdet/datasets/__init__.py b/pcdet/datasets/__init__.py
+index 47c3900..ecdf22b 100644
+--- a/pcdet/datasets/__init__.py
++++ b/pcdet/datasets/__init__.py
+@@ -12,7 +12,7 @@ from .waymo.waymo_dataset import WaymoDataset
+ from .pandaset.pandaset_dataset import PandasetDataset
+ from .lyft.lyft_dataset import LyftDataset
+ from .once.once_dataset import ONCEDataset
+-from .argo2.argo2_dataset import Argo2Dataset
++#from .argo2.argo2_dataset import Argo2Dataset
+ from .custom.custom_dataset import CustomDataset
+ 
+ __all__ = {
+@@ -24,7 +24,7 @@ __all__ = {
+     'LyftDataset': LyftDataset,
+     'ONCEDataset': ONCEDataset,
+     'CustomDataset': CustomDataset,
+-    'Argo2Dataset': Argo2Dataset
++    #'Argo2Dataset': Argo2Dataset
+ }
+ 
+ 
+diff --git a/pcdet/datasets/pandaset/pandaset_dataset.py b/pcdet/datasets/pandaset/pandaset_dataset.py
+index b3c86d5..2988c4f 100644
+--- a/pcdet/datasets/pandaset/pandaset_dataset.py
++++ b/pcdet/datasets/pandaset/pandaset_dataset.py
+@@ -4,22 +4,22 @@
+ 
+ import pickle
+ import os
++import numpy as np
++import torch
++
+ try:
+     import pandas as pd
+     import pandaset as ps
+-except:
+-    pass 
+-import numpy as np
++except ImportError:
++    pass
+ 
+ from ..dataset import DatasetTemplate
+ from ...ops.roiaware_pool3d import roiaware_pool3d_utils
+ 
+-import torch
+-
+ 
+ def pose_dict_to_numpy(pose):
+     """
+-        Conert pandaset pose dict to a numpy vector in order to pass it through the network
++    Convert pandaset pose dict to a numpy vector in order to pass it through the network
+     """
+     pose_np = [pose["position"]["x"],
+                pose["position"]["y"],
+@@ -29,12 +29,12 @@ def pose_dict_to_numpy(pose):
+                pose["heading"]["y"],
+                pose["heading"]["z"]]
+ 
+-    return pose_np
++    return np.array(pose_np)
+ 
+ 
+ def pose_numpy_to_dict(pose):
+     """
+-        Conert pandaset pose dict to a numpy vector in order to pass it through the network
++    Convert numpy pose vector back to pandaset pose dict
+     """
+     pose_dict = {'position':
+                     {'x': pose[0],
+@@ -49,6 +49,51 @@ def pose_numpy_to_dict(pose):
+     return pose_dict
+ 
+ 
++def transform_points_coordinates(points, pose):
++    """
++    Robust function to transform points coordinates between coordinate systems
++    Handles different versions of pandaset and different pose formats
++    """
++    try:
++        # Try new version function name first
++        if hasattr(ps.geometry, 'transform_points'):
++            return ps.geometry.transform_points(points, pose)
++        # Try alternative function name
++        elif hasattr(ps.geometry, 'apply_pose'):
++            return ps.geometry.apply_pose(points, pose)
++        else:
++            # Manual implementation as fallback
++            if isinstance(pose, dict):
++                # Extract rotation matrix and translation from pose dict
++                heading = pose['heading']
++                w, x, y, z = heading['w'], heading['x'], heading['y'], heading['z']
++
++                # Convert quaternion to rotation matrix
++                rotation = np.array([
++                    [1 - 2*y*y - 2*z*z, 2*x*y - 2*z*w, 2*x*z + 2*y*w],
++                    [2*x*y + 2*z*w, 1 - 2*x*x - 2*z*z, 2*y*z - 2*x*w],
++                    [2*x*z - 2*y*w, 2*y*z + 2*x*w, 1 - 2*x*x - 2*y*y]
++                ])
++
++                translation = np.array([
++                    pose['position']['x'],
++                    pose['position']['y'],
++                    pose['position']['z']
++                ])
++            else:
++                # Assume pose is a 4x4 transformation matrix
++                rotation = pose[:3, :3]
++                translation = pose[:3, 3]
++
++            # Apply transformation: world_points = R @ ego_points + T
++            transformed_points = np.dot(points, rotation.T) + translation
++            return transformed_points
++    except Exception as e:
++        print(f"Coordinate transformation failed: {e}")
++        # Return original points if transformation fails
++        return points
++
++
+ class PandasetDataset(DatasetTemplate):
+     def __init__(self, dataset_cfg, class_names, training=True, root_path=None, logger=None):
+         """
+@@ -64,12 +109,12 @@ class PandasetDataset(DatasetTemplate):
+         )
+         if root_path is None:
+             root_path = self.dataset_cfg.DATA_PATH
++
+         self.dataset = ps.DataSet(os.path.join(root_path, 'dataset'))
+         self.split = self.dataset_cfg.DATA_SPLIT[self.mode]
+         self.pandaset_infos = []
+         self.include_pandaset_infos(self.mode)
+ 
+-
+     def include_pandaset_infos(self, mode):
+         if self.logger is not None:
+             self.logger.info('Loading PandaSet dataset')
+@@ -88,16 +133,13 @@ class PandasetDataset(DatasetTemplate):
+         if self.logger is not None:
+             self.logger.info('Total samples for PandaSet dataset ({}): {}'.format(self.mode, len(pandaset_infos)))
+ 
+-
+     def set_split(self, split):
+         self.sequences = self.dataset_cfg.SEQUENCES[split]
+         self.split = split
+ 
+-
+     def __len__(self):
+         return len(self.pandaset_infos)
+ 
+-
+     def __getitem__(self, index):
+         """
+         To support a custom dataset, implement this function to load the raw data (and labels), then transform them to
+@@ -118,14 +160,15 @@ class PandasetDataset(DatasetTemplate):
+         boxes, labels, zrot_world_to_ego = self._get_annotations(info, pose)
+         pose_np = pose_dict_to_numpy(pose)
+ 
+-        input_dict = {'points': points,
+-                      'gt_boxes': boxes,
+-                      'gt_names': labels,
+-                      'sequence': int(seq_idx),
+-                      'frame_idx': info['frame_idx'],
+-                      'zrot_world_to_ego': zrot_world_to_ego,
+-                      'pose': pose_dict_to_numpy(pose)
+-                     }
++        input_dict = {
++            'points': points,
++            'gt_boxes': boxes,
++            'gt_names': labels,
++            'sequence': int(seq_idx),
++            'frame_idx': info['frame_idx'],
++            'zrot_world_to_ego': zrot_world_to_ego,
++            'pose': pose_np
++        }
+         # seq_idx is converted to int because strings can't be passed to
+         # the gpu in pytorch
+         # zrot_world_to_ego is propagated in order to be able to transform the
+@@ -135,7 +178,6 @@ class PandasetDataset(DatasetTemplate):
+ 
+         return data_dict
+ 
+-
+     def _get_pose(self, info):
+         seq_idx = info['sequence']
+         # get pose for world to ego frame transformation
+@@ -146,7 +188,6 @@ class PandasetDataset(DatasetTemplate):
+ 
+         return pose
+ 
+-
+     def _get_lidar_points(self, info, pose):
+         """
+         Get lidar in the unified normative coordinate system for a given frame
+@@ -165,7 +206,7 @@ class PandasetDataset(DatasetTemplate):
+         points_loc = world_points[:, :3]
+         points_int = world_points[:, 3]
+ 
+-        # nromalize intensity
++        # normalize intensity
+         points_int = points_int / 255
+ 
+         ego_points = ps.geometry.lidar_points_to_ego(points_loc, pose)
+@@ -178,13 +219,12 @@ class PandasetDataset(DatasetTemplate):
+         # - y pointings to the left
+         # - z pointing to the top
+         # So a transformation is required to the match the normative coordinates
+-        ego_points = ego_points[:, [1, 0, 2]] # switch x and y
+-        ego_points[:, 1] = - ego_points[:, 1] # revert y axis
++        ego_points = ego_points[:, [1, 0, 2]]  # switch x and y
++        ego_points[:, 1] = - ego_points[:, 1]  # revert y axis
+ 
+         return np.append(ego_points, np.expand_dims(points_int, axis=1), axis=1).astype(np.float32)
+ 
+-
+-    def _get_annotations(self,info, pose):
++    def _get_annotations(self, info, pose):
+         """
+         Get box informations in the unified normative coordinate system for a given frame
+         """
+@@ -208,7 +248,7 @@ class PandasetDataset(DatasetTemplate):
+         del cuboids  # There seem to be issues with the automatic deletion of pandas datasets sometimes
+ 
+         labels = np.array([self.dataset_cfg.TRAINING_CATEGORIES.get(lab, lab)
+-                           for lab in labels] )
++                           for lab in labels])
+ 
+         # Compute the center points coordinates in ego coordinates
+         centers = np.vstack([xs, ys, zs]).T
+@@ -251,7 +291,6 @@ class PandasetDataset(DatasetTemplate):
+ 
+         return ego_boxes.astype(np.float32), labels, zrot_world_to_ego
+ 
+-
+     @staticmethod
+     def generate_prediction_dicts(batch_dict, pred_dicts, class_names, output_path=None):
+         """
+@@ -296,32 +335,33 @@ class PandasetDataset(DatasetTemplate):
+             ego_yaws = yaws
+ 
+             # convert from pandaset ego coordinates to world coordinates
+-            # for the moment, an simplified estimation of the ego yaw is computed in __getitem__
+-            # which sets ego_yaw = world_yaw + zrot_world_to_ego
+             world_yaws = ego_yaws - zrot
+ 
+             ego_centers = np.vstack([ego_xs, ego_ys, ego_zs]).T
+-            world_centers = ps.geometry.ego_to_lidar_points(ego_centers, pose_dict)
++
++            # Use robust coordinate transformation
++            world_centers = transform_points_coordinates(ego_centers, pose_dict)
++
+             world_xs = world_centers[:, 0]
+             world_ys = world_centers[:, 1]
+             world_zs = world_centers[:, 2]
+             # dx, dy, dz remain unchanged as the bbox orientation is handled by
+             # the yaw information
+ 
+-            data_dict = {'position.x': world_xs,
+-                         'position.y': world_ys,
+-                         'position.z': world_zs,
+-                         'dimensions.x': ego_dxs,
+-                         'dimensions.y': ego_dys,
+-                         'dimensions.z': ego_dzs,
+-                         'yaw': world_yaws % (2 * np.pi),
+-                         'label': names,
+-                         'score': pred_scores
++            data_dict = {
++                'position.x': world_xs,
++                'position.y': world_ys,
++                'position.z': world_zs,
++                'dimensions.x': ego_dxs,
++                'dimensions.y': ego_dys,
++                'dimensions.z': ego_dzs,
++                'yaw': world_yaws % (2 * np.pi),
++                'label': names,
++                'score': pred_scores
+             }
+ 
+             return pd.DataFrame(data_dict)
+ 
+-
+         annos = []
+         for index, box_dict in enumerate(pred_dicts):
+             frame_idx = batch_dict['frame_idx'][index]
+@@ -331,12 +371,13 @@ class PandasetDataset(DatasetTemplate):
+ 
+             single_pred_df = generate_single_sample_dataframe(index, box_dict, zrot, pose)
+ 
+-
+-            single_pred_dict = {'preds' : single_pred_df,
+-                                # 'name 'ensures testing the number of detections in a compatible format as kitti
+-                                'name' : single_pred_df['label'].tolist(),
+-                                'frame_idx': frame_idx,
+-                                'sequence': str(seq_idx).zfill(3)}
++            single_pred_dict = {
++                'preds': single_pred_df,
++                # 'name' ensures testing the number of detections in a compatible format as kitti
++                'name': single_pred_df['label'].tolist(),
++                'frame_idx': frame_idx,
++                'sequence': str(seq_idx).zfill(3)
++            }
+             # seq_idx was converted to int in self.__getitem__` because strings
+             # can't be passed to the gpu in pytorch.
+             # To convert it back to a string, we assume that the sequence is
+@@ -354,7 +395,6 @@ class PandasetDataset(DatasetTemplate):
+ 
+         return annos
+ 
+-
+     def get_infos(self):
+         """
+         Generate the dataset infos dict for each sample of the dataset.
+@@ -378,11 +418,12 @@ class PandasetDataset(DatasetTemplate):
+                                                   'annotations', 'cuboids', ("{:02d}.pkl.gz".format(ii)))
+                     } for ii in range(len(s.lidar.data))]
+             infos.extend(info)
+-            del self.dataset._sequences[seq]
++            # Clean up to save memory
++            if seq in self.dataset._sequences:
++                del self.dataset._sequences[seq]
+ 
+         return infos
+ 
+-
+     def create_groundtruth_database(self, info_path=None, used_classes=None, split='train'):
+         database_save_path = os.path.join(self.root_path,
+                 'gt_database' if split == 'train' else 'gt_database_{}'.format(split))
+@@ -427,16 +468,18 @@ class PandasetDataset(DatasetTemplate):
+                         all_db_infos[names[i]].append(db_info)
+                     else:
+                         all_db_infos[names[i]] = [db_info]
++
++        # Log database statistics
+         for k, v in all_db_infos.items():
+             print('Database %s: %d' % (k, len(v)))
+ 
+         with open(db_info_save_path, 'wb') as f:
+             pickle.dump(all_db_infos, f)
+ 
+-
+     def evaluation(self, det_annos, class_names, **kwargs):
+-        self.logger.warning('Evaluation is not implemented for Pandaset as there is no official one. ' +
+-                            'Returning an empty evaluation result.')
++        if self.logger is not None:
++            self.logger.warning('Evaluation is not implemented for Pandaset as there is no official one. ' +
++                                'Returning an empty evaluation result.')
+         ap_result_str = ''
+         ap_dict = {}
+ 
+@@ -450,6 +493,7 @@ def create_pandaset_infos(dataset_cfg, class_names, data_path, save_path):
+     See PandasetDataset.get_infos for further details.
+     """
+     dataset = PandasetDataset(dataset_cfg=dataset_cfg, class_names=class_names, root_path=data_path, training=False)
++
+     for split in ["train", "val", "test"]:
+         print("---------------- Start to generate {} data infos ---------------".format(split))
+         dataset.set_split(split)
+@@ -482,8 +526,4 @@ if __name__ == '__main__':
+             class_names=['Car', 'Pedestrian', 'Cyclist'],
+             data_path=ROOT_DIR / 'data' / 'pandaset',
+             save_path=ROOT_DIR / 'data' / 'pandaset'
+-        )
+-
+-
+-
+-
++        )
+\ No newline at end of file
+diff --git a/pcdet/models/backbones_3d/vfe/pillar_vfe.py b/pcdet/models/backbones_3d/vfe/pillar_vfe.py
+index a162a83..cfa2905 100644
+--- a/pcdet/models/backbones_3d/vfe/pillar_vfe.py
++++ b/pcdet/models/backbones_3d/vfe/pillar_vfe.py
+@@ -94,7 +94,7 @@ class PillarVFE(VFETemplate):
+     def forward(self, batch_dict, **kwargs):
+   
+         voxel_features, voxel_num_points, coords = batch_dict['voxels'], batch_dict['voxel_num_points'], batch_dict['voxel_coords']
+-        points_mean = voxel_features[:, :, :3].sum(dim=1, keepdim=True) / voxel_num_points.type_as(voxel_features).view(-1, 1, 1)
++        points_mean = voxel_features[:, :, :3].sum(axis=1, keepdims=True) / voxel_num_points.type_as(voxel_features).view(-1, 1, 1)
+         f_cluster = voxel_features[:, :, :3] - points_mean
+ 
+         f_center = torch.zeros_like(voxel_features[:, :, :3])
+diff --git a/pcdet/models/detectors/detector3d_template.py b/pcdet/models/detectors/detector3d_template.py
+index 91e44bd..523a6d6 100644
+--- a/pcdet/models/detectors/detector3d_template.py
++++ b/pcdet/models/detectors/detector3d_template.py
+@@ -268,11 +268,15 @@ class Detector3DTemplate(nn.Module):
+                 final_labels = label_preds[selected]
+                 final_boxes = box_preds[selected]
+                     
+-            recall_dict = self.generate_recall_record(
+-                box_preds=final_boxes if 'rois' not in batch_dict else src_box_preds,
+-                recall_dict=recall_dict, batch_index=index, data_dict=batch_dict,
+-                thresh_list=post_process_cfg.RECALL_THRESH_LIST
+-            )        
++                # 🛡️ 跳过无标签数据的 recall 计算
++                if 'gt_boxes' in batch_dict and batch_dict['gt_boxes'].numel() > 0:
++                    recall_dict = self.generate_recall_record(
++                        box_preds=final_boxes if 'rois' not in batch_dict else src_box_preds,
++                        recall_dict=recall_dict, batch_index=index, data_dict=batch_dict,
++                        thresh_list=post_process_cfg.RECALL_THRESH_LIST
++                    )
++                else:
++                    recall_dict = {}
+ 
+             record_dict = {
+                 'pred_boxes': final_boxes,
+@@ -283,21 +287,73 @@ class Detector3DTemplate(nn.Module):
+ 
+         return pred_dicts, recall_dict
+ 
++
+     @staticmethod
+     def generate_recall_record(box_preds, recall_dict, batch_index, data_dict=None, thresh_list=None):
++        """
++        Safe version for Pandar128 demo.
++        Skip recall computation when gt_boxes are missing, empty, or malformed.
++        """
++        import torch
++        import numpy as np
++        from pcdet.ops.iou3d_nms import iou3d_nms_utils
++
++        # ==================== Safety Checks ====================
++        if data_dict is None:
++            print("[INFO] Skipping recall: data_dict is None.")
++            return recall_dict
++
+         if 'gt_boxes' not in data_dict:
++            print("[INFO] Skipping recall: gt_boxes not in data_dict.")
+             return recall_dict
+ 
++        gt_boxes = data_dict['gt_boxes']
++
++        try:
++            # Case 1: list
++            if isinstance(gt_boxes, list):
++                if len(gt_boxes) == 0 or gt_boxes[0] is None:
++                    print("[INFO] Skipping recall: gt_boxes is an empty list.")
++                    return recall_dict
++
++            # Case 2: numpy
++            elif isinstance(gt_boxes, np.ndarray):
++                if gt_boxes.size == 0 or gt_boxes.ndim < 2:
++                    print(f"[INFO] Skipping recall: malformed gt_boxes, shape={gt_boxes.shape}.")
++                    return recall_dict
++
++            # Case 3: torch tensor
++            elif isinstance(gt_boxes, torch.Tensor):
++                if gt_boxes.numel() == 0 or gt_boxes.ndim < 2:
++                    print(f"[INFO] Skipping recall: empty gt tensor, shape={gt_boxes.shape}.")
++                    return recall_dict
++                if batch_index >= gt_boxes.shape[0]:
++                    print(f"[INFO] Skipping recall: invalid batch index {batch_index} for gt_boxes shape {gt_boxes.shape}.")
++                    return recall_dict
++
++            else:
++                print(f"[INFO] Skipping recall: unsupported gt_boxes type ({type(gt_boxes)}).")
++                return recall_dict
++
++        except Exception as e:
++            print(f"[INFO] Skipping recall due to error: {e}")
++            return recall_dict
++        # ========================================================
++
++        # ✅ Safe to proceed
+         rois = data_dict['rois'][batch_index] if 'rois' in data_dict else None
+-        gt_boxes = data_dict['gt_boxes'][batch_index]
++        gt_boxes = gt_boxes[batch_index]
+ 
+         if recall_dict.__len__() == 0:
+             recall_dict = {'gt': 0}
+             for cur_thresh in thresh_list:
+-                recall_dict['roi_%s' % (str(cur_thresh))] = 0
+-                recall_dict['rcnn_%s' % (str(cur_thresh))] = 0
++                recall_dict[f'roi_{str(cur_thresh)}'] = 0
++                recall_dict[f'rcnn_{str(cur_thresh)}'] = 0
+ 
+         cur_gt = gt_boxes
++        if len(cur_gt.shape) == 1:
++            cur_gt = cur_gt.unsqueeze(0)
++
+         k = cur_gt.__len__() - 1
+         while k >= 0 and cur_gt[k].sum() == 0:
+             k -= 1
+@@ -314,19 +370,21 @@ class Detector3DTemplate(nn.Module):
+ 
+             for cur_thresh in thresh_list:
+                 if iou3d_rcnn.shape[0] == 0:
+-                    recall_dict['rcnn_%s' % str(cur_thresh)] += 0
++                    recall_dict[f'rcnn_{str(cur_thresh)}'] += 0
+                 else:
+                     rcnn_recalled = (iou3d_rcnn.max(dim=0)[0] > cur_thresh).sum().item()
+-                    recall_dict['rcnn_%s' % str(cur_thresh)] += rcnn_recalled
++                    recall_dict[f'rcnn_{str(cur_thresh)}'] += rcnn_recalled
+                 if rois is not None:
+                     roi_recalled = (iou3d_roi.max(dim=0)[0] > cur_thresh).sum().item()
+-                    recall_dict['roi_%s' % str(cur_thresh)] += roi_recalled
++                    recall_dict[f'roi_{str(cur_thresh)}'] += roi_recalled
+ 
+             recall_dict['gt'] += cur_gt.shape[0]
+         else:
+             gt_iou = box_preds.new_zeros(box_preds.shape[0])
++
+         return recall_dict
+ 
++
+     def _load_state_dict(self, model_state_disk, *, strict=True):
+         state_dict = self.state_dict()  # local cache of state_dict
+ 
+diff --git a/tools/cfgs/dataset_configs/pandaset_dataset.yaml b/tools/cfgs/dataset_configs/pandaset_dataset.yaml
+index d2d8d4e..bf49999 100644
+--- a/tools/cfgs/dataset_configs/pandaset_dataset.yaml
++++ b/tools/cfgs/dataset_configs/pandaset_dataset.yaml
+@@ -1,7 +1,8 @@
++# pandaset_dataset.yaml (内存优化版)
+ DATASET: 'PandasetDataset'
+-DATA_PATH: '../data/pandaset'
++DATA_PATH: /mnt/d/pcdet-pandaset/data/pandaset
+ 
+-POINT_CLOUD_RANGE: [-70, -40, -3, 70, 40, 1] # xmin, ymin, zmin, xmax, ymax, zmax
++POINT_CLOUD_RANGE: [-70, -40, -3, 70, 40, 1]
+ 
+ DATA_SPLIT: {
+     'train': train,
+@@ -9,80 +10,31 @@ DATA_SPLIT: {
+ }
+ 
+ SEQUENCES: {
+-    'train': ['014', '050', '079', '048', '093', '091', '063', '104', '100', '092', '012', '047', '018', '006', '099', '085', '035', '041', '052', '105', '030', '113', '002', '084', '028', '119', '044', '005', '102', '034', '077', '064', '067', '058', '019', '015', '037', '095', '120', '066', '023', '071', '117', '098', '139', '038', '116', '046', '088', '089', '040', '033', '016', '024', '122', '039', '158', '069', '124', '123', '106'], # ~60% of the sequences, randomly chosen
+-    'val': ['045', '059', '055', '051', '020', '097', '073', '043', '003', '101', '027', '056', '011', '078', '080', '109', '042', '021', '094', '057'], # ~20% of the sequences, randomly chosen
+-    'test': ['074', '004', '086', '062', '068', '008', '001', '110', '053', '115', '054', '065', '017', '103', '072', '013', '029', '090', '112', '149', '070', '032'] # ~20% of the sequences, randomly chosen
++    'train': ['014', '050', '079'],  # 只使用3个序列测试
++    'val': ['045', '059'],
++    'test': ['074', '004']
+ }
+ 
+-# Acquisition device to consider when loading the data
+-# Pandaset contains data from:
+-# - a pandar64 spinning lidar
+-# - a pandarGT forward facing lidar
+-# To use data from:
+-# - the pandar64 lidar only (default), set LIDAR_DEVICE to 0,
+-# - the pandarGT lidar onlu, set it to 1
+-# - both devices, set it to -1
+ LIDAR_DEVICE: 0
+ 
+-
+ INFO_PATH: {
+     'train': [pandaset_infos_train.pkl],
+     'test': [pandaset_infos_val.pkl],
+ }
+ 
+ TRAINING_CATEGORIES: {
+-# This maps raw dataset categories with the corresponding categories used in training
+-# This map can be incomplete. In case a category is not present, the category
+-# for training is the same as the raw dataset category
+   'Car': 'Car',
+   'Pickup Truck': 'Car',
+-  'Medium-sized Truck': 'Truck',
+-  'Semi-truck': 'Truck',
+-  'Towed Object': 'Other Vehicle',
+-  'Motorcycle': 'Motorcycle',
+-  'Other Vehicle - Construction Vehicle': 'Other Vehicle',
+-  'Other Vehicle - Uncommon': 'Other Vehicle',
+-  'Other Vehicle - Pedicab': 'Other Vehicle',
+-  'Emergency Vehicle': 'Other Vehicle',
+-  'Bus': 'Bus',
+-  'Bicycle': 'Bicycle',
+   'Pedestrian': 'Pedestrian',
+-  'Pedestrian with Object': 'Pedestrian',
+-  'Animals - Other': 'Animal'
++  'Bicycle': 'Cyclist'
+ }
+ 
+-
+ FOV_POINTS_ONLY: False
+ 
+-
++# 暂时禁用所有数据增强
+ DATA_AUGMENTOR:
+-    DISABLE_AUG_LIST: ['placeholder']
+-    AUG_CONFIG_LIST:
+-# gt sampling not working at the moment
+-        - NAME: gt_sampling
+-          USE_ROAD_PLANE: False
+-          DB_INFO_PATH:
+-              - pandaset_dbinfos_train.pkl
+-          PREPARE: {
+-             filter_by_min_points: ['Car:5', 'Pedestrian:5', 'Bicycle:5'],
+-             filter_by_difficulty: [-1],
+-          }
+-
+-          SAMPLE_GROUPS: ['Car:20','Pedestrian:15', 'Bicycle:15']
+-          NUM_POINT_FEATURES: 4
+-          DATABASE_WITH_FAKELIDAR: False
+-          REMOVE_EXTRA_WIDTH: [0.0, 0.0, 0.0]
+-          LIMIT_WHOLE_SCENE: True
+-
+-        - NAME: random_world_flip
+-          ALONG_AXIS_LIST: ['x', 'y']
+-
+-        - NAME: random_world_rotation
+-          WORLD_ROT_ANGLE: [-3.14159265, 3.114159265]
+-
+-        - NAME: random_world_scaling
+-          WORLD_SCALE_RANGE: [0.95, 1.05]
+-
++    DISABLE_AUG_LIST: ['gt_sampling', 'random_world_flip', 'random_world_rotation', 'random_world_scaling']
++    AUG_CONFIG_LIST: []
+ 
+ POINT_FEATURE_ENCODING: {
+     encoding_type: absolute_coordinates_encoding,
+@@ -90,21 +42,20 @@ POINT_FEATURE_ENCODING: {
+     src_feature_list: ['x', 'y', 'z', 'intensity'],
+ }
+ 
+-
+ DATA_PROCESSOR:
+     - NAME: mask_points_and_boxes_outside_range
+       REMOVE_OUTSIDE_BOXES: True
+ 
+     - NAME: shuffle_points
+       SHUFFLE_ENABLED: {
+-        'train': True,
++        'train': False,  # 训练时也禁用shuffle以减少内存
+         'test': False
+       }
+ 
+     - NAME: transform_points_to_voxels
+-      VOXEL_SIZE: [0.05, 0.05, 0.1]
+-      MAX_POINTS_PER_VOXEL: 5
++      VOXEL_SIZE: [0.25, 0.25, 4]   # 增大体素大小
++      MAX_POINTS_PER_VOXEL: 32       # 减少点数
+       MAX_NUMBER_OF_VOXELS: {
+-        'train': 16000,
+-        'test': 40000
+-      }
++        'train': 6000,    # 大幅减少体素数量
++        'test': 12000
++      }
+\ No newline at end of file
+diff --git a/tools/demo.py b/tools/demo.py
+index 259d469..d330a93 100644
+--- a/tools/demo.py
++++ b/tools/demo.py
+@@ -2,6 +2,8 @@ import argparse
+ import glob
+ from pathlib import Path
+ 
++global_args = None   # ← 定义一个全局变量
++
+ try:
+     import open3d
+     from visual_utils import open3d_vis_utils as V
+@@ -46,6 +48,12 @@ class DemoDataset(DatasetTemplate):
+     def __getitem__(self, index):
+         if self.ext == '.bin':
+             points = np.fromfile(self.sample_file_list[index], dtype=np.float32).reshape(-1, 4)
++
++            # ✅ Apply manual Z offset if needed
++            if global_args.z_offset != 0.0:
++                points[:, 2] += global_args.z_offset
++                print(f"[INFO] Applied Z offset: {global_args.z_offset:.2f} m")
++
+         elif self.ext == '.npy':
+             points = np.load(self.sample_file_list[index])
+         else:
+@@ -68,6 +76,7 @@ def parse_config():
+                         help='specify the point cloud data file or directory')
+     parser.add_argument('--ckpt', type=str, default=None, help='specify the pretrained model')
+     parser.add_argument('--ext', type=str, default='.bin', help='specify the extension of your point cloud data file')
++    parser.add_argument('--z_offset', type=float, default=0.0, help='manual Z-axis offset (meters)')
+ 
+     args = parser.parse_args()
+ 
+@@ -77,35 +86,77 @@ def parse_config():
+ 
+ 
+ def main():
++    global global_args
+     args, cfg = parse_config()
++    global_args = args
+     logger = common_utils.create_logger()
+-    logger.info('-----------------Quick Demo of OpenPCDet-------------------------')
++
++
+     demo_dataset = DemoDataset(
+-        dataset_cfg=cfg.DATA_CONFIG, class_names=cfg.CLASS_NAMES, training=False,
+-        root_path=Path(args.data_path), ext=args.ext, logger=logger
++        dataset_cfg=cfg.DATA_CONFIG,
++        class_names=cfg.CLASS_NAMES,
++        training=False,
++        root_path=Path(args.data_path),
++        ext=args.ext,
+     )
+-    logger.info(f'Total number of samples: \t{len(demo_dataset)}')
+ 
+     model = build_network(model_cfg=cfg.MODEL, num_class=len(cfg.CLASS_NAMES), dataset=demo_dataset)
+     model.load_params_from_file(filename=args.ckpt, logger=logger, to_cpu=True)
+     model.cuda()
+     model.eval()
+-    with torch.no_grad():
+-        for idx, data_dict in enumerate(demo_dataset):
+-            logger.info(f'Visualized sample index: \t{idx + 1}')
+-            data_dict = demo_dataset.collate_batch([data_dict])
+-            load_data_to_gpu(data_dict)
++
++    for idx, data_dict in enumerate(demo_dataset):
++        logger.info(f'Visualizing sample index: \t{idx + 1}')
++
++        points = data_dict['points']
++
++        # 🧠 若是 numpy，则转成 torch.Tensor
++        if isinstance(points, np.ndarray):
++            points = torch.from_numpy(points).float()
++
++        # 🪜 应用Z轴偏移
++        if args.z_offset != 0:
++            points[:, 2] += args.z_offset
++            logger.info(f'[INFO] Applied Z offset: {args.z_offset:.2f} m')
++
++        # ⚙️ 放回并转到CUDA
++        data_dict['points'] = points.cuda()
++
++        # 🚀 模型推理
++        with torch.no_grad():
+             pred_dicts, _ = model.forward(data_dict)
+ 
+-            V.draw_scenes(
+-                points=data_dict['points'][:, 1:], ref_boxes=pred_dicts[0]['pred_boxes'],
+-                ref_scores=pred_dicts[0]['pred_scores'], ref_labels=pred_dicts[0]['pred_labels']
+-            )
+ 
+-            if not OPEN3D_FLAG:
+-                mlab.show(stop=True)
+ 
+-    logger.info('Demo done.')
++        # ✅ Step 2: Distance filter (radius < 120m)
++        d = np.linalg.norm(points[:, :3], axis=1)
++        keep = d < 120.0
++        points = points[keep]
++        print(f"[INFO] Distance filter: kept {keep.sum()}/{len(keep)} points (<120m)")
++
++        # ✅ Step 3: ROI filter according to Pandaset range
++        x_min, y_min, z_min, x_max, y_max, z_max = -80, -80, -5, 80, 80, 3
++        mask = (
++            (points[:, 0] >= x_min) & (points[:, 0] <= x_max) &
++            (points[:, 1] >= y_min) & (points[:, 1] <= y_max) &
++            (points[:, 2] >= z_min) & (points[:, 2] <= z_max)
++        )
++        points = points[mask]
++        print(f"[INFO] ROI filter: kept {mask.sum()} points in [-80,80]^2x[-5,3]")
++
++        data_dict['points'] = torch.from_numpy(points).float().cuda().unsqueeze(0)
++
++        pred_dicts, _ = model.forward(data_dict)
++
++        # ✅ Step 4: Filter low-confidence boxes
++        pred = pred_dicts[0]
++        score_thresh = 0.45
++        mask = pred['pred_scores'] > score_thresh
++        for k in ['pred_boxes', 'pred_scores', 'pred_labels']:
++            pred[k] = pred[k][mask]
++        print(f"[INFO] Box filter: kept {mask.sum()} boxes with score>{score_thresh}")
++
++        model.show_result(data_dict, pred_dicts, output_dir=Path('./output_vis'), score_thresh=score_thresh)
+ 
+ 
+ if __name__ == '__main__':

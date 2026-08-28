@@ -1,0 +1,41 @@
+# Python bytecode and environments
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+
+# Packaging, tests, and tooling
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Sensor captures, datasets, models, and generated outputs
+/data/
+/output/
+/outputs/
+/tmp/
+*.pcap
+*.pcapng
+*.bin
+*.ply
+*.npz
+*.pth
+*.ckpt
+*.pkl
+*.zip
+*.log
+
+# Local Codex/rendering artifacts
+/.codex_report_render/
